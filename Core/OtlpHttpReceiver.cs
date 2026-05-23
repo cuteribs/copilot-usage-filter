@@ -9,6 +9,8 @@ namespace CopilotUsageFilter;
 /// </summary>
 public sealed class OtlpHttpReceiver : IDisposable
 {
+    private static readonly byte[] s_okBytes = "{}"u8.ToArray();
+
     private readonly HttpListener _listener;
     private readonly Func<string, string, Task> _onRequest; // (path, body)
     private CancellationTokenSource? _cts;
@@ -32,6 +34,8 @@ public sealed class OtlpHttpReceiver : IDisposable
     {
         _cts?.Cancel();
         try { _listener.Stop(); } catch { }
+        // Wait briefly for the listen loop to drain before caller releases resources
+        try { _listenTask?.Wait(TimeSpan.FromSeconds(2)); } catch { }
     }
 
     private async Task ListenAsync(CancellationToken ct)
@@ -75,9 +79,8 @@ public sealed class OtlpHttpReceiver : IDisposable
             // expect 200 just like trace exporters do.
             ctx.Response.StatusCode = 200;
             ctx.Response.ContentType = "application/json";
-            var okBytes = "{}"u8.ToArray();
-            ctx.Response.ContentLength64 = okBytes.Length;
-            await ctx.Response.OutputStream.WriteAsync(okBytes);
+            ctx.Response.ContentLength64 = s_okBytes.Length;
+            await ctx.Response.OutputStream.WriteAsync(s_okBytes);
         }
         catch (Exception ex)
         {
@@ -93,6 +96,7 @@ public sealed class OtlpHttpReceiver : IDisposable
     public void Dispose()
     {
         Stop();
+        _cts?.Dispose();
         _listener.Close();
     }
 }

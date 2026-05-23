@@ -9,10 +9,16 @@ namespace CopilotUsageFilter;
 /// </summary>
 public sealed class SpanProcessor
 {
+    // Console output uses ForegroundColor + Write + ResetColor which is not atomic.
+    // Multiple Task.Run handlers can race and interleave color changes → garbled output.
+    private static readonly object s_consoleLock = new();
     public void Process(string path, string json)
     {
         if (!path.StartsWith("/v1/traces", StringComparison.OrdinalIgnoreCase))
             return; // only process trace requests
+
+        // Write raw body to file before parsing (if exporter is configured)
+        TraceFileExporter.Write(json);
 
         // 1. Try real OTLP resourceSpans format
         var spans = OtlpTraceParser.ExtractChatSpans(json);
@@ -40,6 +46,8 @@ public sealed class SpanProcessor
         // Truncate GUIDs to first 8 chars for readability
         static string Short(string? s) => s is { Length: > 8 } ? s[..8] : (s ?? "-");
 
+        lock (s_consoleLock)
+        {
         // Timestamp in dark gray
         WriteColored(DateTime.Now.ToString("s"), ConsoleColor.DarkGray);
 
@@ -52,6 +60,7 @@ public sealed class SpanProcessor
         WriteKV("\tcache_read",  (attrs.CacheReadTokens      ?? 0).ToString(),   ConsoleColor.DarkCyan);
 
         Console.WriteLine();
+        } // end lock
     }
 
     // Writes "key=VALUE" where VALUE gets the specified color; key is in default color.

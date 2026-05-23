@@ -54,6 +54,17 @@ public partial class MainForm : Form
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.WriteLine(url);
             Console.ResetColor();
+
+            if (TraceFileExporter.IsEnabled)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.Write(DateTime.Now.ToString("s"));
+                Console.ResetColor();
+                Console.Write("\texporting traces\t");
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine(TraceFileExporter.FilePath);
+                Console.ResetColor();
+            }
         }
         catch (Exception ex)
         {
@@ -68,6 +79,7 @@ public partial class MainForm : Form
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         _receiver.Stop();
+        TraceFileExporter.Shutdown();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         base.OnFormClosing(e);

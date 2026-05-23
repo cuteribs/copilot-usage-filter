@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -14,6 +15,11 @@ public static class SessionStatePatcher
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".copilot", "session-state");
 
+    // Cache positive hits only. Null results are NOT cached so that a folder
+    // that appears slightly after the first span is eventually found.
+    private static readonly ConcurrentDictionary<string, string> s_folderCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Returns the session folder whose name (GUID) matches conversationId.
     /// Copilot session folders are named with the session/conversation GUID.
@@ -22,12 +28,20 @@ public static class SessionStatePatcher
     /// </summary>
     public static string? FindSessionFolder(string conversationId, string? rootOverride = null)
     {
+        // Use the cache only for real (non-test) lookups
+        if (rootOverride == null && s_folderCache.TryGetValue(conversationId, out var cached))
+            return cached;
+
         var root = rootOverride ?? SessionStateRoot;
         if (!Directory.Exists(root)) return null;
 
         // Direct match: folder name IS the conversation id
         var direct = Path.Combine(root, conversationId);
-        if (Directory.Exists(direct)) return direct;
+        if (Directory.Exists(direct))
+        {
+            if (rootOverride == null) s_folderCache[conversationId] = direct;
+            return direct;
+        }
 
         // Fallback: scan session.start events for a sessionId match
         foreach (var dir in Directory.EnumerateDirectories(root))
@@ -45,7 +59,10 @@ public static class SessionStatePatcher
                     var node = JsonNode.Parse(line);
                     var sessionId = node?["data"]?["sessionId"]?.GetValue<string>();
                     if (string.Equals(sessionId, conversationId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (rootOverride == null) s_folderCache[conversationId] = dir;
                         return dir;
+                    }
                 }
             }
             catch { }
