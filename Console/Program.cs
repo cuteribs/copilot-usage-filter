@@ -38,16 +38,13 @@ try
     Console.WriteLine(url);
     Console.ResetColor();
 
-    if (TraceFileExporter.IsEnabled)
-    {
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.Write(DateTime.Now.ToString("s"));
-        Console.ResetColor();
-        Console.Write("\texporting traces\t");
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine(TraceFileExporter.FilePath);
-        Console.ResetColor();
-    }
+    Console.ForegroundColor = ConsoleColor.DarkGray;
+    Console.Write(DateTime.Now.ToString("s"));
+    Console.ResetColor();
+    Console.Write("\texporting traces\t");
+    Console.ForegroundColor = ConsoleColor.Cyan;
+    Console.WriteLine(TraceFileExporter.FilePath);
+    Console.ResetColor();
 
     await Task.Delay(Timeout.Infinite, cts.Token);
 }
