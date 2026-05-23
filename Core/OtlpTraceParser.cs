@@ -53,6 +53,27 @@ public static class OtlpTraceParser
                     }
                 }
             }
+
+            // Second pass: for sub-agent chat spans that lack interaction_id, inherit
+            // from a direct span in the same batch that shares the same conversation_id.
+            // Build a map: conversation_id → interaction_id (from spans that have both).
+            var knownInteractions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var s in result)
+            {
+                if (s.ConversationId != null && s.InteractionId != null)
+                    knownInteractions.TryAdd(s.ConversationId, s.InteractionId);
+            }
+
+            foreach (var s in result)
+            {
+                if (s.InteractionId == null &&
+                    s.ConversationId != null &&
+                    knownInteractions.TryGetValue(s.ConversationId, out var inherited))
+                {
+                    s.InteractionId = inherited;
+                    s.IsSubAgent = true;  // don't patch session state for these
+                }
+            }
         }
         catch (Exception ex)
         {

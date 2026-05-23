@@ -57,6 +57,14 @@ public sealed class SpanAttributes
 
     [JsonPropertyName("gen_ai.usage.cache_read.input_tokens")]
     public long? CacheReadTokens { get; set; }
+
+    /// <summary>
+    /// True for spans that did not carry their own interaction_id — they are
+    /// sub-agent LLM calls (children of invoke_agent spans) that inherited the
+    /// interaction_id from a sibling span in the same OTLP batch.
+    /// Sub-agent spans are printed but never patched into session-state.
+    /// </summary>
+    public bool IsSubAgent { get; set; }
 }
 
 internal static class JsonOptions

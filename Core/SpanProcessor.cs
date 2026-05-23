@@ -53,7 +53,7 @@ public sealed class SpanProcessor
 
         WriteKV("\tsession",     Short(attrs.ConversationId),                    ConsoleColor.Yellow);
         WriteKV("\tinteraction", Short(attrs.InteractionId),                     ConsoleColor.Cyan);
-        WriteKV("\tturn",        attrs.TurnId                       ?? "-",      ConsoleColor.Magenta);
+        WriteKV("\tturn",        attrs.IsSubAgent ? "sub" : (attrs.TurnId ?? "-"), ConsoleColor.Magenta);
         WriteKV("\tinput",       (attrs.InputTokens          ?? 0).ToString(),   ConsoleColor.Green);
         WriteKV("\toutput",      (attrs.OutputTokens         ?? 0).ToString(),   ConsoleColor.Blue);
         WriteKV("\tcache_write", (attrs.CacheCreationTokens  ?? 0).ToString(),   ConsoleColor.DarkYellow);
@@ -79,6 +79,10 @@ public sealed class SpanProcessor
 
     private static void PatchSession(SpanAttributes attrs)
     {
+        // Sub-agent spans inherit interaction_id from sibling spans but have no
+        // corresponding assistant.message event in session state — skip patching.
+        if (attrs.IsSubAgent) return;
+
         if (string.IsNullOrEmpty(attrs.ConversationId) ||
             string.IsNullOrEmpty(attrs.InteractionId))
             return;
