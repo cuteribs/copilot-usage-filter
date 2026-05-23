@@ -12,6 +12,13 @@ public sealed class SpanProcessor
     // Console output uses ForegroundColor + Write + ResetColor which is not atomic.
     // Multiple Task.Run handlers can race and interleave color changes → garbled output.
     private static readonly object s_consoleLock = new();
+
+    // Cross-batch cache: conversationId → interactionId.
+    // Populated by direct-agent chat spans; used to supply interactionId to sub-agent
+    // chat spans that arrive in a later batch without a direct sibling.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string>
+        s_interactionCache = new(StringComparer.OrdinalIgnoreCase);
+
     public void Process(string path, string json)
     {
         if (!path.StartsWith("/v1/traces", StringComparison.OrdinalIgnoreCase))
@@ -21,6 +28,30 @@ public sealed class SpanProcessor
         var spans = OtlpTraceParser.ExtractChatSpans(json);
         if (spans.Count > 0)
         {
+            // Update the cross-batch cache with any direct-agent interactionIds found.
+            foreach (var s in spans)
+            {
+                if (!s.IsSubAgent &&
+                    s.ConversationId != null &&
+                    s.InteractionId  != null)
+                {
+                    s_interactionCache.TryAdd(s.ConversationId, s.InteractionId);
+                }
+            }
+
+            // Apply cache to sub-agent spans still missing interactionId
+            // (i.e. their sibling direct-agent span arrived in an earlier batch).
+            foreach (var s in spans)
+            {
+                if (s.InteractionId == null &&
+                    s.ConversationId != null &&
+                    s_interactionCache.TryGetValue(s.ConversationId, out var cached))
+                {
+                    s.InteractionId = cached;
+                    s.IsSubAgent    = true;
+                }
+            }
+
             foreach (var attrs in spans)
                 HandleChatSpan(attrs);
             return;
