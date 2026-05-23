@@ -189,4 +189,85 @@ public sealed class SessionStatePatcherTests : IDisposable
         var line = File.ReadAllLines(Path.Combine(folder, "events.jsonl"))[0];
         Assert.Equal(42, GetTokenField(line, "input_tokens"));
     }
+
+    // ── PatchSubAgentMessage tests ────────────────────────────────────────────
+
+    [Fact]
+    public void PatchSubAgentMessage_BasicPatch_SetsInputAndCacheFields()
+    {
+        // Two sub-agent steps for the same parentToolCallId; last one gets patched.
+        var folder = CreateSession("sa1", string.Join('\n',
+            """{"type":"assistant.message","data":{"interactionId":"inter1","parentToolCallId":"call_ABC","outputTokens":50}}""",
+            """{"type":"assistant.message","data":{"interactionId":"inter1","parentToolCallId":"call_ABC","outputTokens":30}}"""));
+
+        var ok = SessionStatePatcher.PatchSubAgentMessage(
+            folder, "inter1", "call_ABC",
+            inputTokens: 1000, cacheCreationTokens: null, cacheReadTokens: 400);
+
+        Assert.True(ok);
+        var lines = File.ReadAllLines(Path.Combine(folder, "events.jsonl"));
+        // Only the last matching line is patched
+        Assert.Null(GetTokenField(lines[0], "input_tokens"));
+        Assert.Equal(1000, GetTokenField(lines[1], "input_tokens"));
+        Assert.Equal(400,  GetTokenField(lines[1], "cache_read_tokens"));
+    }
+
+    [Fact]
+    public void PatchSubAgentMessage_AlreadyPatched_Skipped()
+    {
+        var folder = CreateSession("sa2",
+            """{"type":"assistant.message","data":{"interactionId":"inter1","parentToolCallId":"call_ABC","input_tokens":999}}""");
+
+        var ok = SessionStatePatcher.PatchSubAgentMessage(
+            folder, "inter1", "call_ABC",
+            inputTokens: 1, cacheCreationTokens: null, cacheReadTokens: null);
+
+        Assert.False(ok);
+        var line = File.ReadAllLines(Path.Combine(folder, "events.jsonl"))[0];
+        Assert.Equal(999, GetTokenField(line, "input_tokens")); // untouched
+    }
+
+    [Fact]
+    public void PatchSubAgentMessage_WrongParentToolCallId_ReturnsFalse()
+    {
+        var folder = CreateSession("sa3",
+            """{"type":"assistant.message","data":{"interactionId":"inter1","parentToolCallId":"call_OTHER"}}""");
+
+        var ok = SessionStatePatcher.PatchSubAgentMessage(
+            folder, "inter1", "call_ABC",
+            inputTokens: 100, cacheCreationTokens: null, cacheReadTokens: null);
+
+        Assert.False(ok);
+    }
+
+    [Fact]
+    public void PatchSubAgentMessage_EventWithTurnId_Skipped()
+    {
+        // Events that have turnId are direct-agent turns, not sub-agent steps — skip.
+        var folder = CreateSession("sa4",
+            """{"type":"assistant.message","data":{"interactionId":"inter1","parentToolCallId":"call_ABC","turnId":"0"}}""");
+
+        var ok = SessionStatePatcher.PatchSubAgentMessage(
+            folder, "inter1", "call_ABC",
+            inputTokens: 100, cacheCreationTokens: null, cacheReadTokens: null);
+
+        Assert.False(ok);
+    }
+
+    [Fact]
+    public void PatchSubAgentMessage_MultipleToolCallIds_PatchesOnlyMatching()
+    {
+        // Two separate sub-agent invocations with different parentToolCallIds.
+        var folder = CreateSession("sa5", string.Join('\n',
+            """{"type":"assistant.message","data":{"interactionId":"inter1","parentToolCallId":"call_A","outputTokens":10}}""",
+            """{"type":"assistant.message","data":{"interactionId":"inter1","parentToolCallId":"call_B","outputTokens":20}}"""));
+
+        SessionStatePatcher.PatchSubAgentMessage(
+            folder, "inter1", "call_A",
+            inputTokens: 500, cacheCreationTokens: null, cacheReadTokens: null);
+
+        var lines = File.ReadAllLines(Path.Combine(folder, "events.jsonl"));
+        Assert.Equal(500, GetTokenField(lines[0], "input_tokens"));
+        Assert.Null(GetTokenField(lines[1], "input_tokens")); // call_B untouched
+    }
 }

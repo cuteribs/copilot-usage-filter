@@ -77,10 +77,6 @@ public sealed class SpanProcessor
 
     private static void PatchSession(SpanAttributes attrs)
     {
-        // Sub-agent spans inherit interaction_id from sibling spans but have no
-        // corresponding assistant.message event in session state — skip patching.
-        if (attrs.IsSubAgent) return;
-
         if (string.IsNullOrEmpty(attrs.ConversationId) ||
             string.IsNullOrEmpty(attrs.InteractionId))
             return;
@@ -88,6 +84,27 @@ public sealed class SpanProcessor
         var folder = SessionStatePatcher.FindSessionFolder(attrs.ConversationId);
         if (folder == null) return;
 
+        if (attrs.IsSubAgent)
+        {
+            // Patch sub-agent events when we know the triggering toolCallId.
+            // The chain is: execute_tool (toolCallId=X) → invoke_agent → chat.
+            // Session events for that sub-agent carry parentToolCallId=X.
+            // We write the aggregate inputTokens (absent from session state) onto
+            // the last matching event.  outputTokens is already per-step in session.
+            if (!string.IsNullOrEmpty(attrs.SubAgentToolCallId))
+            {
+                SessionStatePatcher.PatchSubAgentMessage(
+                    folder,
+                    attrs.InteractionId,
+                    attrs.SubAgentToolCallId,
+                    attrs.InputTokens,
+                    attrs.CacheCreationTokens,
+                    attrs.CacheReadTokens);
+            }
+            return;
+        }
+
+        // Direct (non-sub-agent) spans: patch by interactionId + turnId.
         SessionStatePatcher.PatchAssistantMessage(
             folder,
             attrs.InteractionId,

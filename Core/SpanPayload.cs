@@ -68,9 +68,17 @@ public sealed class SpanAttributes
     /// True for spans that did not carry their own interaction_id — they are
     /// sub-agent LLM calls (children of invoke_agent spans) that inherited the
     /// interaction_id from a sibling span in the same OTLP batch.
-    /// Sub-agent spans are printed but never patched into session-state.
     /// </summary>
     public bool IsSubAgent { get; set; }
+
+    /// <summary>
+    /// For sub-agent spans whose invoke_agent parent is itself a direct child of an
+    /// execute_tool span: the execute_tool's gen_ai.tool.call.id value.
+    /// This matches the parentToolCallId field in session-state assistant.message events,
+    /// allowing aggregate token counts to be patched into the correct sub-agent session event.
+    /// Null when the chain cannot be determined from the OTLP batch.
+    /// </summary>
+    public string? SubAgentToolCallId { get; set; }
 }
 
 internal static class JsonOptions

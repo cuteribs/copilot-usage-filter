@@ -13,6 +13,8 @@ public static class OtlpTraceParser
     /// <summary>
     /// Returns all spans from the payload that have gen_ai.operation.name = "chat".
     /// Returns an empty list for non-trace payloads (e.g. resourceMetrics).
+    /// Also resolves the execute_tool → invoke_agent → chat linkage so that
+    /// sub-agent spans carry a SubAgentToolCallId when the chain is deterministic.
     /// </summary>
     public static List<SpanAttributes> ExtractChatSpans(string json)
     {
@@ -29,6 +31,15 @@ public static class OtlpTraceParser
             var resourceSpans = root["resourceSpans"]?.AsArray();
             if (resourceSpans == null) return result;
 
+            // ── Pass 1: scan ALL spans to build span-relationship maps ────────────
+            // spanId → (opName, toolCallId)  — for execute_tool / invoke_agent lookups
+            var spanMeta   = new Dictionary<string, (string? OpName, string? ToolCallId)>(
+                                 StringComparer.OrdinalIgnoreCase);
+            // spanId → parentSpanId
+            var spanParent = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // chat spans deferred for Pass 3
+            var chatNodes  = new List<(string SpanId, string ParentId, JsonArray? Attrs)>();
+
             foreach (var rs in resourceSpans)
             {
                 var scopeSpans = rs?["scopeSpans"]?.AsArray()
@@ -42,21 +53,75 @@ public static class OtlpTraceParser
 
                     foreach (var span in spans)
                     {
-                        var attrs = ParseAttributes(span?["attributes"]?.AsArray());
-                        if (attrs == null) continue;
+                        var spanId   = span?["spanId"]?.GetValue<string>()       ?? "";
+                        var parentId = span?["parentSpanId"]?.GetValue<string>() ?? "";
+                        var attrsArr = span?["attributes"]?.AsArray();
 
-                        // Filter: only chat spans
-                        if (!string.Equals(attrs.GenAiOperationName, "chat",
-                                StringComparison.OrdinalIgnoreCase)) continue;
+                        string? opName = null, toolCallId = null;
+                        if (attrsArr != null)
+                        {
+                            foreach (var item in attrsArr)
+                            {
+                                var key = item?["key"]?.GetValue<string>();
+                                if (key == null) continue;
+                                if (key == "gen_ai.operation.name")
+                                    opName = ExtractValue(item?["value"]);
+                                else if (key == "gen_ai.tool.call.id")
+                                    toolCallId = ExtractValue(item?["value"]);
+                            }
+                        }
 
-                        result.Add(attrs);
+                        if (!string.IsNullOrEmpty(spanId))
+                        {
+                            spanMeta[spanId]   = (opName, toolCallId);
+                            spanParent[spanId] = parentId;
+                        }
+
+                        if (string.Equals(opName, "chat", StringComparison.OrdinalIgnoreCase))
+                            chatNodes.Add((spanId, parentId, attrsArr));
                     }
                 }
             }
 
-            // Second pass: for sub-agent chat spans that lack interaction_id, inherit
-            // from a direct span in the same batch that shares the same conversation_id.
-            // Build a map: conversation_id → interaction_id (from spans that have both).
+            // ── Pass 2: build invoke_agent → toolCallId lookup ────────────────────
+            // An invoke_agent span gets a toolCallId only when its direct parent is
+            // an execute_tool span that carries gen_ai.tool.call.id.
+            var invokeAgentCallId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in spanMeta)
+            {
+                if (!string.Equals(kvp.Value.OpName, "invoke_agent",
+                        StringComparison.OrdinalIgnoreCase)) continue;
+                if (!spanParent.TryGetValue(kvp.Key, out var parentId) ||
+                        string.IsNullOrEmpty(parentId)) continue;
+                if (!spanMeta.TryGetValue(parentId, out var parentMeta)) continue;
+                if (!string.Equals(parentMeta.OpName, "execute_tool",
+                        StringComparison.OrdinalIgnoreCase)) continue;
+                if (string.IsNullOrEmpty(parentMeta.ToolCallId)) continue;
+
+                invokeAgentCallId[kvp.Key] = parentMeta.ToolCallId;
+            }
+
+            // ── Pass 3: parse chat spans and set SubAgentToolCallId ───────────────
+            foreach (var (spanId, parentId, attrsArr) in chatNodes)
+            {
+                var attrs = ParseAttributes(attrsArr);
+                if (attrs == null) continue;
+                result.Add(attrs);
+
+                // chat → invoke_agent → execute_tool chain
+                if (!string.IsNullOrEmpty(parentId) &&
+                    spanMeta.TryGetValue(parentId, out var parentMeta) &&
+                    string.Equals(parentMeta.OpName, "invoke_agent",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    invokeAgentCallId.TryGetValue(parentId, out var callId))
+                {
+                    attrs.SubAgentToolCallId = callId;
+                }
+            }
+
+            // ── Pass 4: inherit interaction_id for sub-agent spans ────────────────
+            // Sub-agent chat spans have no interaction_id of their own; inherit from
+            // a direct-agent span in the same batch sharing the same conversation_id.
             var knownInteractions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var s in result)
             {
@@ -71,7 +136,7 @@ public static class OtlpTraceParser
                     knownInteractions.TryGetValue(s.ConversationId, out var inherited))
                 {
                     s.InteractionId = inherited;
-                    s.IsSubAgent = true;  // don't patch session state for these
+                    s.IsSubAgent = true;
                 }
             }
         }

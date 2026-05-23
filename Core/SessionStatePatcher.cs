@@ -189,4 +189,114 @@ public static class SessionStatePatcher
             return false;
         }
     }
+
+    /// <summary>
+    /// Patches the last sub-agent assistant.message whose interactionId and
+    /// parentToolCallId both match, adding aggregate input token counts from the
+    /// OTLP sub-agent span.  Sub-agent events already contain per-step outputTokens
+    /// written by Copilot; we only add the aggregate inputTokens that are absent.
+    /// Patching is skipped if the target event already has input_tokens set.
+    /// </summary>
+    public static bool PatchSubAgentMessage(
+        string sessionFolder,
+        string interactionId,
+        string parentToolCallId,
+        long? inputTokens,
+        long? cacheCreationTokens,
+        long? cacheReadTokens)
+    {
+        var eventsFile = Path.Combine(sessionFolder, "events.jsonl");
+        if (!File.Exists(eventsFile)) return false;
+
+        string[] lines;
+        try
+        {
+            using var fs = new FileStream(eventsFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var sr = new StreamReader(fs);
+            var list = new List<string>();
+            string? l;
+            while ((l = sr.ReadLine()) != null) list.Add(l);
+            lines = list.ToArray();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Patcher] Failed to read {eventsFile}: {ex.Message}");
+            return false;
+        }
+
+        // Find the last assistant.message that matches interactionId + parentToolCallId
+        // and has no turnId (sub-agent steps).  Track whether it is already patched.
+        int  bestIndex     = -1;
+        bool alreadyPatched = false;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (!line.Contains("assistant.message")) continue;
+            if (!line.Contains(interactionId))       continue;
+            if (!line.Contains(parentToolCallId))    continue;
+
+            try
+            {
+                var node = JsonNode.Parse(line)?.AsObject();
+                if (node == null) continue;
+
+                if (!string.Equals(node["type"]?.GetValue<string>(), "assistant.message",
+                        StringComparison.Ordinal)) continue;
+
+                var data = node["data"]?.AsObject();
+                if (data == null) continue;
+
+                var msgInteractionId = data["interactionId"]?.GetValue<string>();
+                if (!string.Equals(msgInteractionId, interactionId,
+                        StringComparison.OrdinalIgnoreCase)) continue;
+
+                var msgParentCallId = data["parentToolCallId"]?.GetValue<string>();
+                if (!string.Equals(msgParentCallId, parentToolCallId,
+                        StringComparison.OrdinalIgnoreCase)) continue;
+
+                // Only target sub-agent steps (events without turnId)
+                if (data["turnId"] != null) continue;
+
+                bestIndex     = i;
+                alreadyPatched = data["input_tokens"] != null;
+            }
+            catch { }
+        }
+
+        if (bestIndex < 0 || alreadyPatched) return false;
+
+        try
+        {
+            var node = JsonNode.Parse(lines[bestIndex])!.AsObject();
+            var data = node["data"]!.AsObject();
+
+            if (inputTokens.HasValue)
+                data["input_tokens"] = inputTokens.Value;
+            if (cacheCreationTokens.HasValue && data["cache_creation_tokens"] == null)
+                data["cache_creation_tokens"] = cacheCreationTokens.Value;
+            if (cacheReadTokens.HasValue && data["cache_read_tokens"] == null)
+                data["cache_read_tokens"] = cacheReadTokens.Value;
+
+            lines[bestIndex] = node.ToJsonString(JsonOptions.Default);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Patcher] Failed to patch sub-agent line {bestIndex}: {ex.Message}");
+            return false;
+        }
+
+        try
+        {
+            var tmp = eventsFile + ".tmp";
+            File.WriteAllLines(tmp, lines);
+            File.Replace(tmp, eventsFile, null);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Patcher] Failed to write {eventsFile}: {ex.Message}");
+            return false;
+        }
+    }
 }

@@ -47,6 +47,58 @@ public class OtlpTraceParserTests
             """;
     }
 
+    /// <summary>
+    /// Builds an OTLP batch with a 3-span chain:
+    ///   execute_tool (spanId=exec-span, parentId=root-span, toolCallId=callId)
+    ///   → invoke_agent (spanId=invoke-span, parentId=exec-span)
+    ///     → chat (spanId=chat-sub, parentId=invoke-span, conversationId, no interactionId)
+    /// Plus an optional direct chat span (spanId=chat-direct, parentId=root-span,
+    /// conversationId + interactionId) so the sub-agent can inherit interactionId.
+    /// Uses $$$ raw literals so {{ / }} in JSON content are treated as literal braces.
+    /// </summary>
+    private static string OtlpSubAgentJson(
+        string callId            = "call_ABC123",
+        string conversationId    = "conv-xyz",
+        string interactionId     = "inter-abc",
+        bool   includeDirectChat = true)
+    {
+        var directSpan = includeDirectChat ? $$$"""
+            ,{"spanId":"chat-direct","parentSpanId":"root-span","attributes":[
+                {"key":"gen_ai.operation.name","value":{"stringValue":"chat"}},
+                {"key":"gen_ai.conversation.id","value":{"stringValue":"{{{conversationId}}}"}},
+                {"key":"github.copilot.interaction_id","value":{"stringValue":"{{{interactionId}}}"}},
+                {"key":"github.copilot.turn_id","value":{"stringValue":"0"}},
+                {"key":"gen_ai.usage.input_tokens","value":{"intValue":"500"}},
+                {"key":"gen_ai.usage.output_tokens","value":{"intValue":"100"}}
+            ]}
+            """ : "";
+
+        return $$$"""
+            {
+              "resourceSpans": [{
+                "scopeSpans": [{
+                  "spans": [
+                    {"spanId":"exec-span","parentSpanId":"root-span","attributes":[
+                        {"key":"gen_ai.operation.name","value":{"stringValue":"execute_tool"}},
+                        {"key":"gen_ai.tool.call.id","value":{"stringValue":"{{{callId}}}"}}
+                    ]},
+                    {"spanId":"invoke-span","parentSpanId":"exec-span","attributes":[
+                        {"key":"gen_ai.operation.name","value":{"stringValue":"invoke_agent"}}
+                    ]},
+                    {"spanId":"chat-sub","parentSpanId":"invoke-span","attributes":[
+                        {"key":"gen_ai.operation.name","value":{"stringValue":"chat"}},
+                        {"key":"gen_ai.conversation.id","value":{"stringValue":"{{{conversationId}}}"}},
+                        {"key":"gen_ai.usage.input_tokens","value":{"intValue":"1000"}},
+                        {"key":"gen_ai.usage.output_tokens","value":{"intValue":"200"}}
+                    ]}
+                    {{{directSpan}}}
+                  ]
+                }]
+              }]
+            }
+            """;
+    }
+
     // ── Tests ─────────────────────────────────────────────────────────────────
     [Fact]
     public void ExtractChatSpans_RealOtlpJson_ReturnsChatSpanWithAllFields()
@@ -150,5 +202,82 @@ public class OtlpTraceParserTests
         var spans = OtlpTraceParser.ExtractChatSpans(json);
         // Case-insensitive match: "chat" and "CHAT" both match
         Assert.Equal(2, spans.Count);
+    }
+
+    // ── Sub-agent SubAgentToolCallId resolution tests ─────────────────────────
+
+    [Fact]
+    public void ExtractChatSpans_SubAgentChain_SetsSubAgentToolCallId()
+    {
+        // Chain: execute_tool(callId) → invoke_agent → chat(sub-agent)
+        //        + direct chat (provides interactionId for inheritance)
+        var spans = OtlpTraceParser.ExtractChatSpans(
+            OtlpSubAgentJson(callId: "call_XYZ", includeDirectChat: true));
+
+        Assert.Equal(2, spans.Count);
+
+        var sub    = spans.Single(s => s.IsSubAgent);
+        var direct = spans.Single(s => !s.IsSubAgent);
+
+        Assert.Equal("call_XYZ",  sub.SubAgentToolCallId);
+        Assert.Equal("inter-abc", sub.InteractionId);     // inherited
+        Assert.Null(direct.SubAgentToolCallId);
+    }
+
+    [Fact]
+    public void ExtractChatSpans_SubAgentChain_NoDirectChatSibling_IsSubAgentFalse()
+    {
+        // Without a direct-chat sibling, sub-agent cannot inherit interactionId.
+        // IsSubAgent stays false (no inherited interactionId), but SubAgentToolCallId
+        // is still resolved because the chain info is independent of inheritance.
+        var spans = OtlpTraceParser.ExtractChatSpans(
+            OtlpSubAgentJson(includeDirectChat: false));
+
+        Assert.Single(spans);
+        var sub = spans[0];
+        // interactionId could not be inherited → IsSubAgent remains false
+        Assert.False(sub.IsSubAgent);
+        // But the execute_tool → invoke_agent linkage is still resolved
+        Assert.Equal("call_ABC123", sub.SubAgentToolCallId);
+    }
+
+    [Fact]
+    public void ExtractChatSpans_InvokeAgentParentIsNotExecuteTool_SubAgentToolCallIdNull()
+    {
+        // invoke_agent whose parent is a regular root span (not execute_tool):
+        // no toolCallId can be determined.
+        var json = """
+            {
+              "resourceSpans": [{
+                "scopeSpans": [{
+                  "spans": [
+                    {"spanId":"root-span","parentSpanId":"","attributes":[
+                        {"key":"gen_ai.operation.name","value":{"stringValue":"invoke_agent"}}
+                    ]},
+                    {"spanId":"invoke-span","parentSpanId":"root-span","attributes":[
+                        {"key":"gen_ai.operation.name","value":{"stringValue":"invoke_agent"}}
+                    ]},
+                    {"spanId":"chat-sub","parentSpanId":"invoke-span","attributes":[
+                        {"key":"gen_ai.operation.name","value":{"stringValue":"chat"}},
+                        {"key":"gen_ai.conversation.id","value":{"stringValue":"conv-abc"}},
+                        {"key":"gen_ai.usage.input_tokens","value":{"intValue":"100"}}
+                    ]},
+                    {"spanId":"chat-direct","parentSpanId":"root-span","attributes":[
+                        {"key":"gen_ai.operation.name","value":{"stringValue":"chat"}},
+                        {"key":"gen_ai.conversation.id","value":{"stringValue":"conv-abc"}},
+                        {"key":"github.copilot.interaction_id","value":{"stringValue":"inter-abc"}},
+                        {"key":"github.copilot.turn_id","value":{"stringValue":"0"}}
+                    ]}
+                  ]
+                }]
+              }]
+            }
+            """;
+
+        var spans = OtlpTraceParser.ExtractChatSpans(json);
+        Assert.Equal(2, spans.Count);
+
+        var sub = spans.Single(s => s.IsSubAgent);
+        Assert.Null(sub.SubAgentToolCallId);
     }
 }
