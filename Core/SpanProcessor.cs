@@ -80,8 +80,8 @@ public sealed class SpanProcessor
         // Timestamp in dark gray
         WriteColored(DateTime.Now.ToString("s"), ConsoleColor.DarkGray);
 
-        WriteKV("\tsession",     Short(attrs.ConversationId),                    ConsoleColor.Yellow);
-        WriteKV("\tinteraction", Short(attrs.InteractionId),                     ConsoleColor.Cyan);
+        WriteKV("\tsess", Short(attrs.ConversationId), ConsoleColor.Yellow);
+        WriteKV("\tintr", Short(attrs.InteractionId), ConsoleColor.Cyan);
         WriteKV("\tturn",   attrs.IsSubAgent ? "s" : (attrs.TurnId ?? "-"), ConsoleColor.Magenta);
         WriteKV("\tinput",  (attrs.InputTokens          ?? 0).ToString(),   ConsoleColor.Green);
         WriteKV("\toutput", (attrs.OutputTokens         ?? 0).ToString(),   ConsoleColor.Blue);

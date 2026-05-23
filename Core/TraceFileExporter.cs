@@ -60,8 +60,8 @@ public static class TraceFileExporter
 
         w.WriteStartObject();
         w.WriteString("ts",          DateTime.UtcNow.ToString("O"));
-        if (attrs.ConversationId  != null) w.WriteString("session",      attrs.ConversationId);
-        if (attrs.InteractionId   != null) w.WriteString("interaction",   attrs.InteractionId);
+        if (attrs.ConversationId  != null) w.WriteString("sess", attrs.ConversationId);
+        if (attrs.InteractionId   != null) w.WriteString("intr", attrs.InteractionId);
 
         if (attrs.IsSubAgent)
             w.WriteString("turn", "s");
