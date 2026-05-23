@@ -5,7 +5,7 @@ namespace CopilotUsageFilter;
 
 /// <summary>
 /// Locates a Copilot session-state folder by conversation ID,
-/// finds the assistant.message event matching an interaction ID,
+/// finds the assistant.message event matching interactionId + turnId,
 /// and patches it with token counts.
 /// </summary>
 public static class SessionStatePatcher
@@ -53,12 +53,13 @@ public static class SessionStatePatcher
 
     /// <summary>
     /// Searches the session's events.jsonl for an assistant.message whose
-    /// interactionId matches <paramref name="interactionId"/>, then appends
-    /// the token fields to that JSON line and rewrites the file.
+    /// interactionId and turnId match, then appends token fields to that line.
+    /// If turnId is null, matches by interactionId alone (takes the last match).
     /// </summary>
     public static bool PatchAssistantMessage(
         string sessionFolder,
         string interactionId,
+        string? turnId,
         long? inputTokens,
         long? cacheCreationTokens,
         long? cacheReadTokens,
@@ -70,7 +71,6 @@ public static class SessionStatePatcher
         string[] lines;
         try
         {
-            // Read with shared access so Copilot can still write
             using var fs = new FileStream(eventsFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var sr = new StreamReader(fs);
             var list = new List<string>();
@@ -84,7 +84,11 @@ public static class SessionStatePatcher
             return false;
         }
 
-        bool changed = false;
+        // When turnId is provided, we need an exact match on both fields.
+        // When turnId is absent, we patch the last assistant.message for this interactionId
+        // (most recent turn = most likely to carry the final token counts).
+        int bestIndex = -1;
+
         for (int i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
@@ -96,8 +100,8 @@ public static class SessionStatePatcher
                 var node = JsonNode.Parse(line)?.AsObject();
                 if (node == null) continue;
 
-                var typeVal = node["type"]?.GetValue<string>();
-                if (!string.Equals(typeVal, "assistant.message", StringComparison.Ordinal)) continue;
+                if (!string.Equals(node["type"]?.GetValue<string>(), "assistant.message",
+                        StringComparison.Ordinal)) continue;
 
                 var data = node["data"]?.AsObject();
                 if (data == null) continue;
@@ -105,31 +109,49 @@ public static class SessionStatePatcher
                 var msgInteractionId = data["interactionId"]?.GetValue<string>();
                 if (!string.Equals(msgInteractionId, interactionId, StringComparison.OrdinalIgnoreCase)) continue;
 
-                // Append token fields (only if not already present)
-                if (inputTokens.HasValue && data["input_tokens"] == null)
-                    data["input_tokens"] = inputTokens.Value;
-                if (cacheCreationTokens.HasValue && data["cache_creation_tokens"] == null)
-                    data["cache_creation_tokens"] = cacheCreationTokens.Value;
-                if (cacheReadTokens.HasValue && data["cache_read_tokens"] == null)
-                    data["cache_read_tokens"] = cacheReadTokens.Value;
-                if (outputTokens.HasValue && data["output_tokens"] == null)
-                    data["output_tokens"] = outputTokens.Value;
-
-                lines[i] = node.ToJsonString(JsonOptions.Default);
-                changed = true;
-                break;
+                if (turnId != null)
+                {
+                    // Exact turn match
+                    var msgTurnId = data["turnId"]?.GetValue<string>()
+                                 ?? data["turnId"]?.GetValue<long>().ToString();
+                    if (!string.Equals(msgTurnId, turnId, StringComparison.OrdinalIgnoreCase)) continue;
+                    bestIndex = i;
+                    break; // exact match — stop
+                }
+                else
+                {
+                    bestIndex = i; // keep last match
+                }
             }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[Patcher] Failed to patch line {i}: {ex.Message}");
-            }
+            catch { }
         }
 
-        if (!changed) return false;
+        if (bestIndex < 0) return false;
 
         try
         {
-            // Write atomically: write to temp then replace
+            var node = JsonNode.Parse(lines[bestIndex])!.AsObject();
+            var data = node["data"]!.AsObject();
+
+            if (inputTokens.HasValue && data["input_tokens"] == null)
+                data["input_tokens"] = inputTokens.Value;
+            if (cacheCreationTokens.HasValue && data["cache_creation_tokens"] == null)
+                data["cache_creation_tokens"] = cacheCreationTokens.Value;
+            if (cacheReadTokens.HasValue && data["cache_read_tokens"] == null)
+                data["cache_read_tokens"] = cacheReadTokens.Value;
+            if (outputTokens.HasValue && data["output_tokens"] == null)
+                data["output_tokens"] = outputTokens.Value;
+
+            lines[bestIndex] = node.ToJsonString(JsonOptions.Default);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Patcher] Failed to patch line {bestIndex}: {ex.Message}");
+            return false;
+        }
+
+        try
+        {
             var tmp = eventsFile + ".tmp";
             File.WriteAllLines(tmp, lines);
             File.Replace(tmp, eventsFile, null);

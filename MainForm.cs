@@ -38,12 +38,29 @@ public partial class MainForm : Form
         try
         {
             _receiver.Start();
+            var url = $"http://localhost:{_port}";
             _trayIcon.Text = $"Copilot Usage Filter\nListening on :{_port}";
+
+            // Startup line: timestamp  Listening  url
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine("Copilot Usage Filter");
+            Console.Write(DateTime.Now.ToString("s"));
+            Console.ResetColor();
+            Console.Write('\t');
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.Write("Listening");
+            Console.ResetColor();
+            Console.Write('\t');
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine(url);
+            Console.ResetColor();
         }
         catch (Exception ex)
         {
             _trayIcon.Text = $"Copilot Usage Filter\nERROR: {ex.Message}";
-            Console.Error.WriteLine($"[server] Failed to start: {ex.Message}");
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.Error.WriteLine($"{DateTime.Now:s}\tERROR\t{ex.Message}");
+            Console.ResetColor();
             ShowBalloon("Start Error", ex.Message, ToolTipIcon.Error);
         }
     }
@@ -60,7 +77,7 @@ public partial class MainForm : Form
     {
         var icon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = LoadEmbeddedIcon(),
             Visible = true,
             Text = "Copilot Usage Filter (starting…)",
             ContextMenuStrip = BuildContextMenu(),
@@ -70,12 +87,45 @@ public partial class MainForm : Form
         return icon;
     }
 
+    /// <summary>
+    /// Loads the 32x32 PNG from embedded resources and converts it to an Icon.
+    /// Falls back to SystemIcons.Application if the resource is missing.
+    /// </summary>
+    private static Icon LoadEmbeddedIcon()
+    {
+        try
+        {
+            var asm = typeof(MainForm).Assembly;
+            using var stream = asm.GetManifestResourceStream("CopilotUsageFilter.assets.32.png");
+            if (stream != null)
+            {
+                using var bmp = new Bitmap(stream);
+                return Icon.FromHandle(bmp.GetHicon());
+            }
+        }
+        catch { }
+        return SystemIcons.Application;
+    }
+
     private ContextMenuStrip BuildContextMenu()
     {
         var menu = new ContextMenuStrip();
 
         var statusItem = new ToolStripMenuItem($"Port: {_port}") { Enabled = false };
         menu.Items.Add(statusItem);
+        menu.Items.Add(new ToolStripSeparator());
+
+        // Show / hide console window toggle
+        var consoleItem = new ToolStripMenuItem("Show console") { CheckOnClick = false };
+        consoleItem.Click += (_, _) => ToggleConsole(consoleItem);
+        // Reflect initial state when the menu opens
+        menu.Opening += (_, _) =>
+        {
+            var hwnd = NativeMethods.GetConsoleWindow();
+            consoleItem.Checked = hwnd != IntPtr.Zero && NativeMethods.IsWindowVisible(hwnd);
+            consoleItem.Text = "Show console";
+        };
+        menu.Items.Add(consoleItem);
         menu.Items.Add(new ToolStripSeparator());
 
         // Run at Windows startup toggle
@@ -105,6 +155,17 @@ public partial class MainForm : Form
         menu.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => ExitApp()));
 
         return menu;
+    }
+
+    private static void ToggleConsole(ToolStripMenuItem item)
+    {
+        var hwnd = NativeMethods.GetConsoleWindow();
+        if (hwnd == IntPtr.Zero) return;
+
+        var visible = NativeMethods.IsWindowVisible(hwnd);
+        NativeMethods.ShowWindow(hwnd, visible ? NativeMethods.SW_HIDE : NativeMethods.SW_SHOW);
+        item.Checked = !visible;
+        item.Text = !visible ? "Hide console" : "Show console";
     }
 
     private void ShowStatus()

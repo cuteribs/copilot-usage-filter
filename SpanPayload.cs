@@ -43,6 +43,9 @@ public sealed class SpanAttributes
     [JsonPropertyName("github.copilot.interaction_id")]
     public string? InteractionId { get; set; }
 
+    [JsonPropertyName("github.copilot.turn_id")]
+    public string? TurnId { get; set; }
+
     [JsonPropertyName("gen_ai.usage.input_tokens")]
     public long? InputTokens { get; set; }
 

@@ -11,13 +11,9 @@ public sealed class SpanProcessor
 {
     public void Process(string path, string json)
     {
-        // Log path so the user can see what Copilot CLI is sending
         if (path.Contains("metrics", StringComparison.OrdinalIgnoreCase) ||
             path.Contains("logs", StringComparison.OrdinalIgnoreCase))
-        {
-            // Silently ignore — only traces are of interest
-            return;
-        }
+            return; // silently ignore
 
         // 1. Try real OTLP resourceSpans format
         var spans = OtlpTraceParser.ExtractChatSpans(json);
@@ -31,13 +27,7 @@ public sealed class SpanProcessor
         // 2. Try simplified {"type":"span",...} format
         var simplified = SpanPayload.TryParse(json);
         if (simplified?.IsChat == true)
-        {
             HandleChatSpan(simplified.Attributes!);
-            return;
-        }
-
-        // 3. Unknown / non-trace payload — silently ignore
-        return;
     }
 
     private static void HandleChatSpan(SpanAttributes attrs)
@@ -48,18 +38,35 @@ public sealed class SpanProcessor
 
     private static void PrintTokens(SpanAttributes attrs)
     {
-        // Format: YYYY-MM-DDTHH:mm:ss Session=… Interaction=… input=n output=n cache_write=n cache_read=n
-        var ts = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
+        // Truncate GUIDs to first 8 chars for readability
+        static string Short(string? s) => s is { Length: > 8 } ? s[..8] : (s ?? "-");
 
-        var line = ts;
-        line += $" Session={attrs.ConversationId ?? "-"}";
-        line += $" Interaction={attrs.InteractionId ?? "-"}";
-        line += $" input={attrs.InputTokens ?? 0}";
-        line += $" output={attrs.OutputTokens ?? 0}";
-        line += $" cache_write={attrs.CacheCreationTokens ?? 0}";
-        line += $" cache_read={attrs.CacheReadTokens ?? 0}";
+        // Timestamp in dark gray
+        WriteColored(DateTime.Now.ToString("s"), ConsoleColor.DarkGray);
 
-        Console.WriteLine(line);
+        WriteKV("\tsession",     Short(attrs.ConversationId),                    ConsoleColor.Yellow);
+        WriteKV("\tinteraction", Short(attrs.InteractionId),                     ConsoleColor.Cyan);
+        WriteKV("\tturn",        attrs.TurnId                       ?? "-",      ConsoleColor.Magenta);
+        WriteKV("\tinput",       (attrs.InputTokens          ?? 0).ToString(),   ConsoleColor.Green);
+        WriteKV("\toutput",      (attrs.OutputTokens         ?? 0).ToString(),   ConsoleColor.Blue);
+        WriteKV("\tcache_write", (attrs.CacheCreationTokens  ?? 0).ToString(),   ConsoleColor.DarkYellow);
+        WriteKV("\tcache_read",  (attrs.CacheReadTokens      ?? 0).ToString(),   ConsoleColor.DarkCyan);
+
+        Console.WriteLine();
+    }
+
+    // Writes "key=VALUE" where VALUE gets the specified color; key is in default color.
+    private static void WriteKV(string key, string value, ConsoleColor valueColor)
+    {
+        Console.Write(key + '=');
+        WriteColored(value, valueColor);
+    }
+
+    private static void WriteColored(string text, ConsoleColor color)
+    {
+        Console.ForegroundColor = color;
+        Console.Write(text);
+        Console.ResetColor();
     }
 
     private static void PatchSession(SpanAttributes attrs)
@@ -74,6 +81,7 @@ public sealed class SpanProcessor
         SessionStatePatcher.PatchAssistantMessage(
             folder,
             attrs.InteractionId,
+            attrs.TurnId,       // may be null — falls back to last-match behaviour
             attrs.InputTokens,
             attrs.CacheCreationTokens,
             attrs.CacheReadTokens,
