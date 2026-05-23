@@ -10,8 +10,6 @@
     <ApplicationIcon>assets\app.ico</ApplicationIcon>
     <AssemblyName>CopilotUsageFilter</AssemblyName>
     <RootNamespace>CopilotUsageFilter</RootNamespace>
-    <!-- Allow building on Linux/macOS (CI cross-build) -->
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
   <ItemGroup>
