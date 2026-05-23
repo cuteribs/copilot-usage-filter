@@ -17,9 +17,6 @@ public sealed class SpanProcessor
         if (!path.StartsWith("/v1/traces", StringComparison.OrdinalIgnoreCase))
             return; // only process trace requests
 
-        // Write raw body to file before parsing (if exporter is configured)
-        TraceFileExporter.Write(json);
-
         // 1. Try real OTLP resourceSpans format
         var spans = OtlpTraceParser.ExtractChatSpans(json);
         if (spans.Count > 0)
@@ -38,6 +35,7 @@ public sealed class SpanProcessor
     private static void HandleChatSpan(SpanAttributes attrs)
     {
         PrintTokens(attrs);
+        TraceFileExporter.Write(attrs);
         PatchSession(attrs);
     }
 

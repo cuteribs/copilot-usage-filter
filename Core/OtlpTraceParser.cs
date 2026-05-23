@@ -107,6 +107,8 @@ public static class OtlpTraceParser
             result.InteractionId = interactionId;
         if (dict.TryGetValue("github.copilot.turn_id", out var turnId))
             result.TurnId = turnId;
+        if (dict.TryGetValue("gen_ai.response.model", out var model))
+            result.Model = model;
         if (dict.TryGetValue("gen_ai.usage.input_tokens", out var inp) && TryParseInt(inp, out var inputTokens))
             result.InputTokens = inputTokens;
         if (dict.TryGetValue("gen_ai.usage.output_tokens", out var out_) && TryParseInt(out_, out var outputTokens))
@@ -115,6 +117,8 @@ public static class OtlpTraceParser
             result.CacheCreationTokens = cct;
         if (dict.TryGetValue("gen_ai.usage.cache_read.input_tokens", out var cr) && TryParseInt(cr, out var crt))
             result.CacheReadTokens = crt;
+        if (dict.TryGetValue("gen_ai.usage.reasoning.output_tokens", out var ro) && TryParseInt(ro, out var rot))
+            result.ReasoningOutputTokens = rot;
 
         return result;
     }

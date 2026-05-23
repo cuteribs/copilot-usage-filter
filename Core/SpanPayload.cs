@@ -46,6 +46,9 @@ public sealed class SpanAttributes
     [JsonPropertyName("github.copilot.turn_id")]
     public string? TurnId { get; set; }
 
+    [JsonPropertyName("gen_ai.response.model")]
+    public string? Model { get; set; }
+
     [JsonPropertyName("gen_ai.usage.input_tokens")]
     public long? InputTokens { get; set; }
 
@@ -57,6 +60,9 @@ public sealed class SpanAttributes
 
     [JsonPropertyName("gen_ai.usage.cache_read.input_tokens")]
     public long? CacheReadTokens { get; set; }
+
+    [JsonPropertyName("gen_ai.usage.reasoning.output_tokens")]
+    public long? ReasoningOutputTokens { get; set; }
 
     /// <summary>
     /// True for spans that did not carry their own interaction_id — they are
