@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationIcon>assets\app.ico</ApplicationIcon>
+    <AssemblyName>CopilotUsageFilter</AssemblyName>
+    <RootNamespace>CopilotUsageFilter</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Preserve the same logical resource names so MainForm.cs needs no changes -->
+    <EmbeddedResource Include="assets\*.png">
+      <LogicalName>CopilotUsageFilter.assets.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Core\CopilotUsageFilter.Core.csproj" />
+  </ItemGroup>
+
+</Project>

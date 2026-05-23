@@ -1,10 +1,8 @@
 # CopilotUsageFilter
 
-<p align="center">
-  <img src="assets/128.png" alt="CopilotUsageFilter" width="96"/>
-</p>
+![](Windows/assets/128.png)
 
-A minimal Windows system-tray utility that intercepts GitHub Copilot CLI's OpenTelemetry traces, prints per-interaction token usage to the console, and back-patches the counts into Copilot's session-state files.
+A minimal Windows system-tray utility (or cross-platform console app) that intercepts GitHub Copilot CLI's OpenTelemetry traces, prints per-interaction token usage to the console, and back-patches the counts into Copilot's session-state files.
 
 ---
 
@@ -28,9 +26,20 @@ When the Copilot CLI completes a chat turn it exports an OTLP span to `http://lo
 
 ## Requirements
 
-- Windows 10 / 11
+- Windows 10 / 11 (for the tray app) — or any OS with .NET 10 (for the console app)
 - [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) (or SDK to build)
 - GitHub Copilot CLI
+
+---
+
+## Project structure
+
+```
+CopilotUsageFilter.slnx
+├── Core/       — shared OTLP parsing + session patching (net10.0, all platforms)
+├── Console/    — cross-platform console app (net10.0): Linux, macOS, Windows
+└── Windows/    — Windows system-tray app (net10.0-windows, WinForms)
+```
 
 ---
 
@@ -38,17 +47,20 @@ When the Copilot CLI completes a chat turn it exports an OTLP span to `http://lo
 
 ```powershell
 cd C:\git\eric\copilot-usage-filter
-dotnet build
+
+# Build everything
+dotnet build CopilotUsageFilter.slnx
+
+# Build only the Windows tray app
+dotnet build Windows\CopilotUsageFilter.Windows.csproj
+
+# Build only the cross-platform console app
+dotnet build Console\CopilotUsageFilter.Console.csproj
 ```
 
-Output: `bin\Debug\net10.0-windows\CopilotUsageFilter.exe`
-
-### Publish as a self-contained single file
-
-```powershell
-dotnet publish -c Release -r win-x64 --self-contained true `
-  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
-```
+Output locations:
+- Console: `Console\bin\Debug\net10.0\CopilotUsageFilter.exe`
+- Windows tray: `Windows\bin\Debug\net10.0-windows\CopilotUsageFilter.exe`
 
 ---
 
@@ -56,38 +68,55 @@ dotnet publish -c Release -r win-x64 --self-contained true `
 
 ### 1. Start the collector
 
-From any terminal (cmd, PowerShell, or Windows Terminal):
-
+**Windows (tray app):**
 ```powershell
-.\CopilotUsageFilter.exe          # default port 4318
-.\CopilotUsageFilter.exe 4319     # custom port
+.\Windows\bin\Debug\net10.0-windows\CopilotUsageFilter.exe
 ```
 
-The program attaches to your terminal's console automatically. The first output line confirms the listener is ready:
+**Linux / macOS (console app):**
+```bash
+./Console/bin/Debug/net10.0/CopilotUsageFilter          # default port 4318
+./Console/bin/Debug/net10.0/CopilotUsageFilter 4319     # custom port
+```
+
+The first output line confirms the listener is ready:
 
 ```
 2026-05-22T23:16:04    Listening    http://localhost:4318
 ```
 
-A tray icon appears in the system notification area.
+On Windows, a tray icon also appears in the system notification area.
 
 ### 2. Tell the Copilot CLI where to export
 
 Set the OTLP endpoint environment variable **before** running `copilot`:
 
 ```powershell
+# PowerShell
 $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"
 copilot chat "explain this code"
 ```
 
-Or set it permanently in your user environment:
+```bash
+# bash / zsh
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+copilot chat "explain this code"
+```
+
+Or set it permanently:
 
 ```powershell
+# Windows — permanent (user scope)
 [Environment]::SetEnvironmentVariable(
   "OTEL_EXPORTER_OTLP_ENDPOINT",
   "http://localhost:4318",
   "User"
 )
+```
+
+```bash
+# Linux / macOS — add to ~/.bashrc or ~/.zshrc
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 ```
 
 ### 3. Read the output
@@ -109,7 +138,7 @@ Lines are colored per-field when output goes to a live console. Colors are suppr
 
 ---
 
-## Tray icon
+## Tray icon (Windows only)
 
 Right-click the tray icon for:
 
@@ -150,13 +179,20 @@ The write is atomic (`.tmp` + `File.Replace`) so the file is never left in a cor
 See [DESIGN.md](DESIGN.md) for the full component and data-flow description.
 
 ```
-CopilotUsageFilter.exe
-├── OtlpHttpReceiver   — HttpListener on :4318
-├── OtlpTraceParser    — parses resourceSpans JSON
-├── SpanProcessor      — routes, logs, patches
-├── SessionStatePatcher— finds + patches events.jsonl
-├── MainForm           — hidden WinForms host + tray icon
-└── StartupManager     — HKCU\Run registry toggle
+Core (shared, cross-platform)
+├── OtlpHttpReceiver    — HttpListener on :4318
+├── OtlpTraceParser     — parses resourceSpans JSON
+├── SpanProcessor       — routes, logs, patches
+└── SessionStatePatcher — finds + patches events.jsonl
+
+Console (Linux / macOS / Windows)
+└── Program.cs          — Ctrl+C / SIGTERM → graceful shutdown
+
+Windows (Windows only)
+├── Program.cs          — AttachConsole + Application.Run
+├── MainForm            — hidden WinForms host + tray icon
+├── NativeMethods       — console P/Invoke
+└── StartupManager      — HKCU\Run registry toggle
 ```
 
 ---
@@ -165,8 +201,8 @@ CopilotUsageFilter.exe
 
 **No output after running `copilot chat`**
 
-- Confirm the env var is set: `$env:OTEL_EXPORTER_OTLP_ENDPOINT`
-- Check the tray icon is present and shows `Listening on :4318`
+- Confirm the env var is set: `$env:OTEL_EXPORTER_OTLP_ENDPOINT` (PowerShell) or `echo $OTEL_EXPORTER_OTLP_ENDPOINT` (bash)
+- Check the tray icon is present and shows `Listening on :4318` (Windows) or the console shows the startup line
 - Try posting a test span manually:
   ```powershell
   Invoke-WebRequest -Uri http://localhost:4318/v1/traces -Method Post `

@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Core\CopilotUsageFilter.Core.csproj" />
+  <Project Path="Console\CopilotUsageFilter.Console.csproj" />
+  <Project Path="Windows\CopilotUsageFilter.Windows.csproj" />
+  <Project Path="Tests\CopilotUsageFilter.Tests.csproj" />
+</Solution>

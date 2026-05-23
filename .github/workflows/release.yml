@@ -1,0 +1,165 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'   # e.g. v1.2.3
+
+permissions:
+  contents: write   # needed to create GitHub Releases
+
+# All Console builds run on ubuntu-latest — cross-compilation works fine for
+# framework-dependent single-file (pure managed code, no native linker needed).
+# Windows tray stays on windows-latest because net10.0-windows + WinForms.
+jobs:
+
+  # ── Console app — framework-dependent single-file ───────────────────────────
+  # Tiny binary (~200 KB). Requires .NET 10 to be installed on the target machine.
+  build-console:
+    name: Publish Console (${{ matrix.rid }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            artifact: CopilotUsageFilter-linux-x64
+          - rid: linux-arm64
+            artifact: CopilotUsageFilter-linux-arm64
+          - rid: osx-x64
+            artifact: CopilotUsageFilter-osx-x64
+          - rid: osx-arm64
+            artifact: CopilotUsageFilter-osx-arm64
+          - rid: win-x64
+            artifact: CopilotUsageFilter-win-x64-console.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish (framework-dependent single-file)
+        run: |
+          dotnet publish Console/CopilotUsageFilter.Console.csproj \
+            -c Release \
+            -r ${{ matrix.rid }} \
+            --no-self-contained \
+            -p:PublishSingleFile=true \
+            -p:Version=${{ steps.version.outputs.VERSION }} \
+            -o publish/${{ matrix.rid }}
+
+      - name: Locate and copy binary
+        run: |
+          SRC="publish/${{ matrix.rid }}/CopilotUsageFilter"
+          [ -f "${SRC}.exe" ] && SRC="${SRC}.exe"
+          cp "$SRC" "publish/${{ matrix.artifact }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: publish/${{ matrix.artifact }}
+
+  # ── Windows tray app — framework-dependent single-file ──────────────────────
+  # WinForms requires net10.0-windows; must build on windows-latest.
+  build-windows-tray:
+    name: Publish Windows Tray (win-x64)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Extract version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $ver = $env:GITHUB_REF_NAME -replace '^v',''
+          "VERSION=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Publish (framework-dependent single-file)
+        run: >
+          dotnet publish Windows/CopilotUsageFilter.Windows.csproj
+          -c Release
+          -r win-x64
+          --no-self-contained
+          -p:PublishSingleFile=true
+          -p:Version=${{ steps.version.outputs.VERSION }}
+          -o publish\win-x64-tray
+
+      - name: Copy artifact
+        shell: pwsh
+        run: Copy-Item "publish\win-x64-tray\CopilotUsageFilter.exe" "publish\CopilotUsageFilter-win-x64-tray.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CopilotUsageFilter-win-x64-tray.exe
+          path: publish\CopilotUsageFilter-win-x64-tray.exe
+
+  # ── Create GitHub Release ────────────────────────────────────────────────────
+  create-release:
+    name: Create GitHub Release
+    needs: [ build-console, build-windows-tray ]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Mark Linux / macOS binaries as executable
+        run: chmod +x artifacts/CopilotUsageFilter-linux-* artifacts/CopilotUsageFilter-osx-*
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "CopilotUsageFilter ${{ github.ref_name }}"
+          body: |
+            ## CopilotUsageFilter ${{ github.ref_name }}
+
+            > **Requires [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)** installed on the target machine.
+
+            All binaries are framework-dependent single-file executables (~200–270 KB).
+
+            ### Downloads
+
+            | Platform | File |
+            |---|---|
+            | Linux x64 | `CopilotUsageFilter-linux-x64` |
+            | Linux ARM64 | `CopilotUsageFilter-linux-arm64` |
+            | macOS x64 (Intel) | `CopilotUsageFilter-osx-x64` |
+            | macOS ARM64 (Apple Silicon) | `CopilotUsageFilter-osx-arm64` |
+            | Windows x64 — console | `CopilotUsageFilter-win-x64-console.exe` |
+            | Windows x64 — tray app | `CopilotUsageFilter-win-x64-tray.exe` |
+
+            ### Quick start
+            ```bash
+            # Linux / macOS
+            export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+            chmod +x CopilotUsageFilter-linux-x64
+            ./CopilotUsageFilter-linux-x64
+            ```
+            ```powershell
+            # Windows (console or tray)
+            $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"
+            .\CopilotUsageFilter-win-x64-console.exe
+            ```
+          files: artifacts/*
+          draft: false
+          prerelease: false

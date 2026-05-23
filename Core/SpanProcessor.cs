@@ -11,9 +11,8 @@ public sealed class SpanProcessor
 {
     public void Process(string path, string json)
     {
-        if (path.Contains("metrics", StringComparison.OrdinalIgnoreCase) ||
-            path.Contains("logs", StringComparison.OrdinalIgnoreCase))
-            return; // silently ignore
+        if (!path.StartsWith("/v1/traces", StringComparison.OrdinalIgnoreCase))
+            return; // only process trace requests
 
         // 1. Try real OTLP resourceSpans format
         var spans = OtlpTraceParser.ExtractChatSpans(json);

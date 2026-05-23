@@ -57,7 +57,12 @@ public sealed class OtlpHttpReceiver : IDisposable
         {
             var path = ctx.Request.Url?.AbsolutePath ?? "/";
 
-            if (ctx.Request.HttpMethod is "POST" or "PUT")
+            // Only read + forward the body for trace requests.
+            // Metrics, logs, and any future OTLP signal types are acknowledged
+            // with 200 but their bodies are not read — no wasted allocation.
+            var isTrace = path.StartsWith("/v1/traces", StringComparison.OrdinalIgnoreCase);
+
+            if (isTrace && ctx.Request.HttpMethod is "POST" or "PUT")
             {
                 using var reader = new StreamReader(ctx.Request.InputStream,
                     ctx.Request.ContentEncoding ?? Encoding.UTF8);
@@ -66,7 +71,8 @@ public sealed class OtlpHttpReceiver : IDisposable
                     await _onRequest(path, body);
             }
 
-            // Return standard OTLP success response
+            // Always return standard OTLP success response — metrics/logs exporters
+            // expect 200 just like trace exporters do.
             ctx.Response.StatusCode = 200;
             ctx.Response.ContentType = "application/json";
             var okBytes = "{}"u8.ToArray();

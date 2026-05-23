@@ -17,17 +17,20 @@ public static class SessionStatePatcher
     /// <summary>
     /// Returns the session folder whose name (GUID) matches conversationId.
     /// Copilot session folders are named with the session/conversation GUID.
+    /// <paramref name="rootOverride"/> allows tests to supply a temp directory instead of
+    /// the real <c>%USERPROFILE%\.copilot\session-state</c> path.
     /// </summary>
-    public static string? FindSessionFolder(string conversationId)
+    public static string? FindSessionFolder(string conversationId, string? rootOverride = null)
     {
-        if (!Directory.Exists(SessionStateRoot)) return null;
+        var root = rootOverride ?? SessionStateRoot;
+        if (!Directory.Exists(root)) return null;
 
         // Direct match: folder name IS the conversation id
-        var direct = Path.Combine(SessionStateRoot, conversationId);
+        var direct = Path.Combine(root, conversationId);
         if (Directory.Exists(direct)) return direct;
 
         // Fallback: scan session.start events for a sessionId match
-        foreach (var dir in Directory.EnumerateDirectories(SessionStateRoot))
+        foreach (var dir in Directory.EnumerateDirectories(root))
         {
             var eventsFile = Path.Combine(dir, "events.jsonl");
             if (!File.Exists(eventsFile)) continue;
@@ -111,9 +114,15 @@ public static class SessionStatePatcher
 
                 if (turnId != null)
                 {
-                    // Exact turn match
-                    var msgTurnId = data["turnId"]?.GetValue<string>()
-                                 ?? data["turnId"]?.GetValue<long>().ToString();
+                    // Exact turn match.
+                    // turnId may be a JSON string "0" or a JSON number 0 — handle both.
+                    string? msgTurnId = null;
+                    if (data["turnId"] is System.Text.Json.Nodes.JsonValue tv)
+                    {
+                        if (!tv.TryGetValue<string>(out msgTurnId) &&
+                             tv.TryGetValue<long>(out var n))
+                            msgTurnId = n.ToString();
+                    }
                     if (!string.Equals(msgTurnId, turnId, StringComparison.OrdinalIgnoreCase)) continue;
                     bestIndex = i;
                     break; // exact match — stop
