@@ -82,11 +82,11 @@ public sealed class SpanProcessor
 
         WriteKV("\tsession",     Short(attrs.ConversationId),                    ConsoleColor.Yellow);
         WriteKV("\tinteraction", Short(attrs.InteractionId),                     ConsoleColor.Cyan);
-        WriteKV("\tturn",        attrs.IsSubAgent ? "sub" : (attrs.TurnId ?? "-"), ConsoleColor.Magenta);
-        WriteKV("\tinput",       (attrs.InputTokens          ?? 0).ToString(),   ConsoleColor.Green);
-        WriteKV("\toutput",      (attrs.OutputTokens         ?? 0).ToString(),   ConsoleColor.Blue);
-        WriteKV("\tcache_write", (attrs.CacheCreationTokens  ?? 0).ToString(),   ConsoleColor.DarkYellow);
-        WriteKV("\tcache_read",  (attrs.CacheReadTokens      ?? 0).ToString(),   ConsoleColor.DarkCyan);
+        WriteKV("\tturn",   attrs.IsSubAgent ? "s" : (attrs.TurnId ?? "-"), ConsoleColor.Magenta);
+        WriteKV("\tinput",  (attrs.InputTokens          ?? 0).ToString(),   ConsoleColor.Green);
+        WriteKV("\toutput", (attrs.OutputTokens         ?? 0).ToString(),   ConsoleColor.Blue);
+        WriteKV("\tcwrite", (attrs.CacheCreationTokens  ?? 0).ToString(),   ConsoleColor.DarkYellow);
+        WriteKV("\tcread",  (attrs.CacheReadTokens      ?? 0).ToString(),   ConsoleColor.DarkCyan);
 
         Console.WriteLine();
         } // end lock

@@ -64,15 +64,15 @@ public static class TraceFileExporter
         if (attrs.InteractionId   != null) w.WriteString("interaction",   attrs.InteractionId);
 
         if (attrs.IsSubAgent)
-            w.WriteString("turn", "sub");
+            w.WriteString("turn", "s");
         else if (attrs.TurnId != null)
             w.WriteString("turn", attrs.TurnId);
 
-        if (attrs.Model           != null) w.WriteString("model",         attrs.Model);
-        if (attrs.InputTokens        > 0)  w.WriteNumber("input",         attrs.InputTokens!.Value);
-        if (attrs.OutputTokens       > 0)  w.WriteNumber("output",        attrs.OutputTokens!.Value);
-        if (attrs.CacheReadTokens    > 0)  w.WriteNumber("cache_read",    attrs.CacheReadTokens!.Value);
-        if (attrs.CacheCreationTokens > 0) w.WriteNumber("cache_write",   attrs.CacheCreationTokens!.Value);
+        if (attrs.Model           != null) w.WriteString("model",   attrs.Model);
+        if (attrs.InputTokens        > 0)  w.WriteNumber("input",   attrs.InputTokens!.Value);
+        if (attrs.OutputTokens       > 0)  w.WriteNumber("output",  attrs.OutputTokens!.Value);
+        if (attrs.CacheReadTokens    > 0)  w.WriteNumber("cread",   attrs.CacheReadTokens!.Value);
+        if (attrs.CacheCreationTokens > 0) w.WriteNumber("cwrite",  attrs.CacheCreationTokens!.Value);
         if (attrs.ReasoningOutputTokens > 0) w.WriteNumber("reasoning",   attrs.ReasoningOutputTokens!.Value);
         w.WriteEndObject();
 
