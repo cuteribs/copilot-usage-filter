@@ -117,21 +117,21 @@ public sealed class SpanProcessor
 
         if (attrs.IsSubAgent)
         {
-            // Patch sub-agent events when we know the triggering toolCallId.
-            // The chain is: execute_tool (toolCallId=X) → invoke_agent → chat.
-            // Session events for that sub-agent carry parentToolCallId=X.
-            // We write the aggregate inputTokens (absent from session state) onto
-            // the last matching event.  outputTokens is already per-step in session.
-            if (!string.IsNullOrEmpty(attrs.SubAgentToolCallId))
-            {
-                SessionStatePatcher.PatchSubAgentMessage(
-                    folder,
-                    attrs.InteractionId,
-                    attrs.SubAgentToolCallId,
-                    attrs.InputTokens,
-                    attrs.CacheCreationTokens,
-                    attrs.CacheReadTokens);
-            }
+            // Patch the subagent.completed session event with the detailed token
+            // breakdown (inputTokens, outputTokens, cache, reasoning) that Copilot
+            // records only as an opaque totalTokens sum.
+            // Primary path: SubAgentToolCallId known → match by toolCallId.
+            // Fallback path: SubAgentToolCallId null (flat OTLP hierarchy) →
+            //   match by totalTokens + model (uniqueness required).
+            SessionStatePatcher.PatchSubAgentCompleted(
+                folder,
+                attrs.SubAgentToolCallId,
+                attrs.InputTokens,
+                attrs.CacheCreationTokens,
+                attrs.CacheReadTokens,
+                attrs.OutputTokens,
+                attrs.ReasoningOutputTokens,
+                attrs.Model);
             return;
         }
 

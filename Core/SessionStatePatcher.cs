@@ -191,19 +191,29 @@ public static class SessionStatePatcher
     }
 
     /// <summary>
-    /// Patches the last sub-agent assistant.message whose interactionId and
-    /// parentToolCallId both match, adding aggregate input token counts from the
-    /// OTLP sub-agent span.  Sub-agent events already contain per-step outputTokens
-    /// written by Copilot; we only add the aggregate inputTokens that are absent.
-    /// Patching is skipped if the target event already has input_tokens set.
+    /// Patches the sub-agent's subagent.completed session event with detailed
+    /// token breakdown (inputTokens, outputTokens, cache tokens, reasoning tokens)
+    /// that Copilot only records as an opaque totalTokens sum.
+    ///
+    /// Matching strategy:
+    ///   Primary   – when <paramref name="toolCallId"/> is known: find the unique
+    ///               subagent.completed whose data.toolCallId equals it.
+    ///   Fallback  – when <paramref name="toolCallId"/> is null: find the single
+    ///               unpatched subagent.completed whose data.totalTokens equals
+    ///               inputTokens+outputTokens AND data.model equals
+    ///               <paramref name="model"/>.  Skipped if 0 or >1 candidates.
+    ///
+    /// Patching is skipped when the target event already has input_tokens set.
     /// </summary>
-    public static bool PatchSubAgentMessage(
-        string sessionFolder,
-        string interactionId,
-        string parentToolCallId,
-        long? inputTokens,
-        long? cacheCreationTokens,
-        long? cacheReadTokens)
+    public static bool PatchSubAgentCompleted(
+        string  sessionFolder,
+        string? toolCallId,
+        long?   inputTokens,
+        long?   cacheCreationTokens,
+        long?   cacheReadTokens,
+        long?   outputTokens,
+        long?   reasoningTokens,
+        string? model)
     {
         var eventsFile = Path.Combine(sessionFolder, "events.jsonl");
         if (!File.Exists(eventsFile)) return false;
@@ -224,44 +234,84 @@ public static class SessionStatePatcher
             return false;
         }
 
-        // Find the last assistant.message that matches interactionId + parentToolCallId
-        // and has no turnId (sub-agent steps).  Track whether it is already patched.
-        int  bestIndex     = -1;
+        int  bestIndex      = -1;
         bool alreadyPatched = false;
 
-        for (int i = 0; i < lines.Length; i++)
+        if (toolCallId != null)
         {
-            var line = lines[i];
-            if (!line.Contains("assistant.message")) continue;
-            if (!line.Contains(interactionId))       continue;
-            if (!line.Contains(parentToolCallId))    continue;
-
-            try
+            // ── Primary: exact toolCallId match ──────────────────────────────
+            for (int i = 0; i < lines.Length; i++)
             {
-                var node = JsonNode.Parse(line)?.AsObject();
-                if (node == null) continue;
+                var line = lines[i];
+                if (!line.Contains("subagent.completed")) continue;
+                if (!line.Contains(toolCallId))           continue;
 
-                if (!string.Equals(node["type"]?.GetValue<string>(), "assistant.message",
-                        StringComparison.Ordinal)) continue;
+                try
+                {
+                    var node = JsonNode.Parse(line)?.AsObject();
+                    if (node == null) continue;
+                    if (!string.Equals(node["type"]?.GetValue<string>(),
+                            "subagent.completed", StringComparison.Ordinal)) continue;
 
-                var data = node["data"]?.AsObject();
-                if (data == null) continue;
+                    var data = node["data"]?.AsObject();
+                    if (data == null) continue;
 
-                var msgInteractionId = data["interactionId"]?.GetValue<string>();
-                if (!string.Equals(msgInteractionId, interactionId,
-                        StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.Equals(data["toolCallId"]?.GetValue<string>(), toolCallId,
+                            StringComparison.OrdinalIgnoreCase)) continue;
 
-                var msgParentCallId = data["parentToolCallId"]?.GetValue<string>();
-                if (!string.Equals(msgParentCallId, parentToolCallId,
-                        StringComparison.OrdinalIgnoreCase)) continue;
-
-                // Only target sub-agent steps (events without turnId)
-                if (data["turnId"] != null) continue;
-
-                bestIndex     = i;
-                alreadyPatched = data["input_tokens"] != null;
+                    bestIndex      = i;
+                    alreadyPatched = data["input_tokens"] != null;
+                    break; // toolCallId is unique in a session
+                }
+                catch { }
             }
-            catch { }
+        }
+        else if (inputTokens.HasValue && outputTokens.HasValue)
+        {
+            // ── Fallback: match by totalTokens + model ────────────────────────
+            // Used when the OTLP hierarchy is flat and we have no toolCallId.
+            long expectedTotal = inputTokens.Value + outputTokens.Value;
+            var  candidates    = new List<int>();
+
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                if (!line.Contains("subagent.completed")) continue;
+
+                try
+                {
+                    var node = JsonNode.Parse(line)?.AsObject();
+                    if (node == null) continue;
+                    if (!string.Equals(node["type"]?.GetValue<string>(),
+                            "subagent.completed", StringComparison.Ordinal)) continue;
+
+                    var data = node["data"]?.AsObject();
+                    if (data == null) continue;
+
+                    if (data["input_tokens"] != null) continue; // already patched
+
+                    // totalTokens must match
+                    if (data["totalTokens"] is not { } tv) continue;
+                    long totalTok;
+                    try { totalTok = tv.GetValue<long>(); } catch { continue; }
+                    if (totalTok != expectedTotal) continue;
+
+                    // model must match when provided
+                    if (model != null &&
+                        !string.Equals(data["model"]?.GetValue<string>(), model,
+                            StringComparison.OrdinalIgnoreCase)) continue;
+
+                    candidates.Add(i);
+                }
+                catch { }
+            }
+
+            if (candidates.Count == 1)
+            {
+                bestIndex      = candidates[0];
+                alreadyPatched = false; // already filtered above
+            }
+            // 0 matches → nothing to patch; >1 matches → ambiguous, skip
         }
 
         if (bestIndex < 0 || alreadyPatched) return false;
@@ -273,16 +323,20 @@ public static class SessionStatePatcher
 
             if (inputTokens.HasValue)
                 data["input_tokens"] = inputTokens.Value;
+            if (outputTokens.HasValue && data["output_tokens"] == null)
+                data["output_tokens"] = outputTokens.Value;
             if (cacheCreationTokens.HasValue && data["cache_creation_tokens"] == null)
                 data["cache_creation_tokens"] = cacheCreationTokens.Value;
             if (cacheReadTokens.HasValue && data["cache_read_tokens"] == null)
                 data["cache_read_tokens"] = cacheReadTokens.Value;
+            if (reasoningTokens.HasValue && data["reasoning_tokens"] == null)
+                data["reasoning_tokens"] = reasoningTokens.Value;
 
             lines[bestIndex] = node.ToJsonString(JsonOptions.Default);
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[Patcher] Failed to patch sub-agent line {bestIndex}: {ex.Message}");
+            Console.Error.WriteLine($"[Patcher] Failed to patch sub-agent completed line {bestIndex}: {ex.Message}");
             return false;
         }
 

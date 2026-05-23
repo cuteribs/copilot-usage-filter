@@ -190,84 +190,105 @@ public sealed class SessionStatePatcherTests : IDisposable
         Assert.Equal(42, GetTokenField(line, "input_tokens"));
     }
 
-    // ── PatchSubAgentMessage tests ────────────────────────────────────────────
+    // ── PatchSubAgentCompleted tests ──────────────────────────────────────────
 
     [Fact]
-    public void PatchSubAgentMessage_BasicPatch_SetsInputAndCacheFields()
+    public void PatchSubAgentCompleted_ByToolCallId_PatchesAllTokenFields()
     {
-        // Two sub-agent steps for the same parentToolCallId; last one gets patched.
-        var folder = CreateSession("sa1", string.Join('\n',
-            """{"type":"assistant.message","data":{"interactionId":"inter1","parentToolCallId":"call_ABC","outputTokens":50}}""",
-            """{"type":"assistant.message","data":{"interactionId":"inter1","parentToolCallId":"call_ABC","outputTokens":30}}"""));
+        var folder = CreateSession("sc1",
+            """{"type":"subagent.completed","data":{"toolCallId":"call_XYZ","model":"gpt-5.4-mini","totalTokens":1200,"durationMs":5000}}""");
 
-        var ok = SessionStatePatcher.PatchSubAgentMessage(
-            folder, "inter1", "call_ABC",
-            inputTokens: 1000, cacheCreationTokens: null, cacheReadTokens: 400);
+        var ok = SessionStatePatcher.PatchSubAgentCompleted(
+            folder, toolCallId: "call_XYZ",
+            inputTokens: 1000, cacheCreationTokens: null, cacheReadTokens: 800,
+            outputTokens: 200, reasoningTokens: 30, model: "gpt-5.4-mini");
 
         Assert.True(ok);
-        var lines = File.ReadAllLines(Path.Combine(folder, "events.jsonl"));
-        // Only the last matching line is patched
-        Assert.Null(GetTokenField(lines[0], "input_tokens"));
-        Assert.Equal(1000, GetTokenField(lines[1], "input_tokens"));
-        Assert.Equal(400,  GetTokenField(lines[1], "cache_read_tokens"));
+        var node = JsonNode.Parse(File.ReadAllLines(Path.Combine(folder, "events.jsonl"))[0])!;
+        var data = node["data"]!;
+        Assert.Equal(1000, data["input_tokens"]!.GetValue<long>());
+        Assert.Equal(200,  data["output_tokens"]!.GetValue<long>());
+        Assert.Equal(800,  data["cache_read_tokens"]!.GetValue<long>());
+        Assert.Equal(30,   data["reasoning_tokens"]!.GetValue<long>());
+        // totalTokens written by Copilot must remain unchanged
+        Assert.Equal(1200, data["totalTokens"]!.GetValue<long>());
     }
 
     [Fact]
-    public void PatchSubAgentMessage_AlreadyPatched_Skipped()
+    public void PatchSubAgentCompleted_AlreadyPatched_Skipped()
     {
-        var folder = CreateSession("sa2",
-            """{"type":"assistant.message","data":{"interactionId":"inter1","parentToolCallId":"call_ABC","input_tokens":999}}""");
+        var folder = CreateSession("sc2",
+            """{"type":"subagent.completed","data":{"toolCallId":"call_XYZ","model":"gpt-5.4-mini","totalTokens":1200,"input_tokens":999}}""");
 
-        var ok = SessionStatePatcher.PatchSubAgentMessage(
-            folder, "inter1", "call_ABC",
-            inputTokens: 1, cacheCreationTokens: null, cacheReadTokens: null);
+        var ok = SessionStatePatcher.PatchSubAgentCompleted(
+            folder, toolCallId: "call_XYZ",
+            inputTokens: 1, cacheCreationTokens: null, cacheReadTokens: null,
+            outputTokens: 1, reasoningTokens: null, model: null);
 
         Assert.False(ok);
-        var line = File.ReadAllLines(Path.Combine(folder, "events.jsonl"))[0];
-        Assert.Equal(999, GetTokenField(line, "input_tokens")); // untouched
+        var data = JsonNode.Parse(File.ReadAllLines(Path.Combine(folder, "events.jsonl"))[0])!["data"]!;
+        Assert.Equal(999, data["input_tokens"]!.GetValue<long>()); // untouched
     }
 
     [Fact]
-    public void PatchSubAgentMessage_WrongParentToolCallId_ReturnsFalse()
+    public void PatchSubAgentCompleted_WrongToolCallId_ReturnsFalse()
     {
-        var folder = CreateSession("sa3",
-            """{"type":"assistant.message","data":{"interactionId":"inter1","parentToolCallId":"call_OTHER"}}""");
+        var folder = CreateSession("sc3",
+            """{"type":"subagent.completed","data":{"toolCallId":"call_OTHER","totalTokens":100}}""");
 
-        var ok = SessionStatePatcher.PatchSubAgentMessage(
-            folder, "inter1", "call_ABC",
-            inputTokens: 100, cacheCreationTokens: null, cacheReadTokens: null);
-
-        Assert.False(ok);
-    }
-
-    [Fact]
-    public void PatchSubAgentMessage_EventWithTurnId_Skipped()
-    {
-        // Events that have turnId are direct-agent turns, not sub-agent steps — skip.
-        var folder = CreateSession("sa4",
-            """{"type":"assistant.message","data":{"interactionId":"inter1","parentToolCallId":"call_ABC","turnId":"0"}}""");
-
-        var ok = SessionStatePatcher.PatchSubAgentMessage(
-            folder, "inter1", "call_ABC",
-            inputTokens: 100, cacheCreationTokens: null, cacheReadTokens: null);
+        var ok = SessionStatePatcher.PatchSubAgentCompleted(
+            folder, toolCallId: "call_XYZ",
+            inputTokens: 80, cacheCreationTokens: null, cacheReadTokens: null,
+            outputTokens: 20, reasoningTokens: null, model: null);
 
         Assert.False(ok);
     }
 
     [Fact]
-    public void PatchSubAgentMessage_MultipleToolCallIds_PatchesOnlyMatching()
+    public void PatchSubAgentCompleted_FallbackTotalTokens_SingleMatch_Patches()
     {
-        // Two separate sub-agent invocations with different parentToolCallIds.
-        var folder = CreateSession("sa5", string.Join('\n',
-            """{"type":"assistant.message","data":{"interactionId":"inter1","parentToolCallId":"call_A","outputTokens":10}}""",
-            """{"type":"assistant.message","data":{"interactionId":"inter1","parentToolCallId":"call_B","outputTokens":20}}"""));
+        // toolCallId is null → match by totalTokens + model
+        var folder = CreateSession("sc4",
+            """{"type":"subagent.completed","data":{"toolCallId":"call_XYZ","model":"gpt-5.4-mini","totalTokens":1200,"durationMs":5000}}""");
 
-        SessionStatePatcher.PatchSubAgentMessage(
-            folder, "inter1", "call_A",
-            inputTokens: 500, cacheCreationTokens: null, cacheReadTokens: null);
+        var ok = SessionStatePatcher.PatchSubAgentCompleted(
+            folder, toolCallId: null,
+            inputTokens: 1000, cacheCreationTokens: null, cacheReadTokens: null,
+            outputTokens: 200, reasoningTokens: null, model: "gpt-5.4-mini");
 
-        var lines = File.ReadAllLines(Path.Combine(folder, "events.jsonl"));
-        Assert.Equal(500, GetTokenField(lines[0], "input_tokens"));
-        Assert.Null(GetTokenField(lines[1], "input_tokens")); // call_B untouched
+        Assert.True(ok);
+        var data = JsonNode.Parse(File.ReadAllLines(Path.Combine(folder, "events.jsonl"))[0])!["data"]!;
+        Assert.Equal(1000, data["input_tokens"]!.GetValue<long>());
+    }
+
+    [Fact]
+    public void PatchSubAgentCompleted_FallbackTotalTokens_MultipleMatches_Skipped()
+    {
+        // Two events with same totalTokens + model → ambiguous → skip both
+        var folder = CreateSession("sc5", string.Join('\n',
+            """{"type":"subagent.completed","data":{"toolCallId":"call_A","model":"gpt-5.4-mini","totalTokens":1200}}""",
+            """{"type":"subagent.completed","data":{"toolCallId":"call_B","model":"gpt-5.4-mini","totalTokens":1200}}"""));
+
+        var ok = SessionStatePatcher.PatchSubAgentCompleted(
+            folder, toolCallId: null,
+            inputTokens: 1000, cacheCreationTokens: null, cacheReadTokens: null,
+            outputTokens: 200, reasoningTokens: null, model: "gpt-5.4-mini");
+
+        Assert.False(ok);
+    }
+
+    [Fact]
+    public void PatchSubAgentCompleted_FallbackTotalTokens_ModelMismatch_Skipped()
+    {
+        var folder = CreateSession("sc6",
+            """{"type":"subagent.completed","data":{"toolCallId":"call_XYZ","model":"gpt-4.1","totalTokens":1200}}""");
+
+        // Model mismatch: event has gpt-4.1 but we pass gpt-5.4-mini
+        var ok = SessionStatePatcher.PatchSubAgentCompleted(
+            folder, toolCallId: null,
+            inputTokens: 1000, cacheCreationTokens: null, cacheReadTokens: null,
+            outputTokens: 200, reasoningTokens: null, model: "gpt-5.4-mini");
+
+        Assert.False(ok);
     }
 }
