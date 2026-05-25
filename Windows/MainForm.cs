@@ -9,11 +9,14 @@ public partial class MainForm : Form
     private readonly NotifyIcon _trayIcon;
     private readonly OtlpHttpReceiver _receiver;
     private readonly SpanProcessor _processor = new();
-    private readonly int _port;
+    private readonly AppOptions _opts;
 
-    public MainForm(int port = 4318)
+    // Tray menu items that reflect live options
+    private ToolStripMenuItem? _forwardItem;
+
+    public MainForm(AppOptions opts)
     {
-        _port = port;
+        _opts = opts;
         InitializeComponent();
 
         // Keep the form hidden
@@ -22,8 +25,11 @@ public partial class MainForm : Form
         Opacity = 0;
 
         _trayIcon = BuildTrayIcon();
-        _receiver = new OtlpHttpReceiver(_port, OnSpanReceived);
+        _receiver = new OtlpHttpReceiver(_opts, OnSpanReceived);
     }
+
+    /// <summary>Backwards-compat overload.</summary>
+    public MainForm(int port = 4318) : this(new AppOptions { Port = port }) { }
 
     private async Task OnSpanReceived(string path, string json)
     {
@@ -38,8 +44,8 @@ public partial class MainForm : Form
         try
         {
             _receiver.Start();
-            var url = $"http://localhost:{_port}";
-            _trayIcon.Text = $"Copilot Usage Filter\nListening on :{_port}";
+            var url = $"http://localhost:{_opts.Port}";
+            _trayIcon.Text = $"Copilot Usage Filter\nListening on :{_opts.Port}";
 
             // Startup line: timestamp  Listening  url
             Console.ForegroundColor = ConsoleColor.DarkGray;
@@ -62,6 +68,9 @@ public partial class MainForm : Form
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.WriteLine(TraceFileExporter.FilePath);
             Console.ResetColor();
+
+            if (_opts.ForwardTo != null)
+                LogForwarding(_opts.ForwardTo);
         }
         catch (Exception ex)
         {
@@ -120,7 +129,7 @@ public partial class MainForm : Form
     {
         var menu = new ContextMenuStrip();
 
-        var statusItem = new ToolStripMenuItem($"Port: {_port}") { Enabled = false };
+        var statusItem = new ToolStripMenuItem($"Port: {_opts.Port}") { Enabled = false };
         menu.Items.Add(statusItem);
         menu.Items.Add(new ToolStripSeparator());
 
@@ -161,6 +170,14 @@ public partial class MainForm : Form
         };
         menu.Items.Add(startupItem);
         menu.Items.Add(new ToolStripSeparator());
+
+        // ── Forwarding ────────────────────────────────────────────────────────
+        _forwardItem = new ToolStripMenuItem(ForwardLabel()) { CheckOnClick = false };
+        _forwardItem.Click += (_, _) => SetForwardUrl();
+        menu.Opening += (_, _) => _forwardItem.Text = ForwardLabel();
+        menu.Items.Add(_forwardItem);
+        menu.Items.Add(new ToolStripSeparator());
+
         menu.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => ExitApp()));
 
         return menu;
@@ -181,7 +198,7 @@ public partial class MainForm : Form
     {
         ShowBalloon(
             "Copilot Usage Filter",
-            $"Listening on http://localhost:{_port}/\nSession state: %USERPROFILE%\\.copilot\\session-state\\",
+            $"Listening on http://localhost:{_opts.Port}/\nSession state: %USERPROFILE%\\.copilot\\session-state\\",
             ToolTipIcon.Info);
     }
 
@@ -198,6 +215,64 @@ public partial class MainForm : Form
         _receiver.Stop();
         _trayIcon.Visible = false;
         Application.Exit();
+    }
+
+    // ── Forwarding helpers ────────────────────────────────────────────────────
+
+    private string ForwardLabel() =>
+        _opts.ForwardTo is { Length: > 0 } url
+            ? $"Forward to: {url}"
+            : "Set forward URL…";
+
+    private void SetForwardUrl()
+    {
+        var current = _opts.ForwardTo ?? string.Empty;
+        var input = PromptInput("Forward OTLP to URL", "Enter remote collector URL (leave blank to disable):", current);
+        if (input is null) return; // cancelled
+
+        var url = input.Trim().TrimEnd('/');
+        _opts.ForwardTo = url.Length > 0 ? url : null;
+        LogForwarding(_opts.ForwardTo);
+        ShowBalloon(
+            "OTLP Forwarding",
+            _opts.ForwardTo != null ? $"Forwarding to {_opts.ForwardTo}" : "Forwarding disabled.",
+            ToolTipIcon.Info);
+    }
+
+    /// <summary>
+    /// Minimal single-line input dialog using plain WinForms.
+    /// Returns null if the user cancels.
+    /// </summary>
+    private static string? PromptInput(string title, string label, string defaultValue)
+    {
+        using var form    = new Form { Text = title, Width = 420, Height = 130, StartPosition = FormStartPosition.CenterScreen, MinimizeBox = false, MaximizeBox = false, FormBorderStyle = FormBorderStyle.FixedDialog };
+        var lbl           = new Label  { Text = label, Left = 12, Top = 10, Width = 380, AutoSize = false };
+        var txt           = new TextBox { Left = 12, Top = 30, Width = 380, Text = defaultValue };
+        var ok            = new Button  { Text = "OK",     Left = 230, Top = 58, Width = 75, DialogResult = DialogResult.OK };
+        var cancel        = new Button  { Text = "Cancel", Left = 317, Top = 58, Width = 75, DialogResult = DialogResult.Cancel };
+        form.Controls.AddRange([lbl, txt, ok, cancel]);
+        form.AcceptButton = ok;
+        form.CancelButton = cancel;
+        return form.ShowDialog() == DialogResult.OK ? txt.Text : null;
+    }
+
+    private static void LogForwarding(string? url)
+    {
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.Write(DateTime.Now.ToString("s"));
+        Console.ResetColor();
+        if (url != null)
+        {
+            Console.Write("\tforwarding to\t");
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine(url);
+        }
+        else
+        {
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.WriteLine("\tforwarding disabled");
+        }
+        Console.ResetColor();
     }
 
     // Designer stub — no visual controls needed

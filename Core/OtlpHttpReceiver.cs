@@ -13,15 +13,21 @@ public sealed class OtlpHttpReceiver : IDisposable
 
     private readonly HttpListener _listener;
     private readonly Func<string, string, Task> _onRequest; // (path, body)
+    private readonly AppOptions _opts;
     private CancellationTokenSource? _cts;
     private Task? _listenTask;
 
-    public OtlpHttpReceiver(int port, Func<string, string, Task> onRequest)
+    public OtlpHttpReceiver(AppOptions opts, Func<string, string, Task> onRequest)
     {
+        _opts = opts;
         _onRequest = onRequest;
         _listener = new HttpListener();
-        _listener.Prefixes.Add($"http://localhost:{port}/");
+        _listener.Prefixes.Add($"http://localhost:{opts.Port}/");
     }
+
+    /// <summary>Backwards-compat overload (no forwarding).</summary>
+    public OtlpHttpReceiver(int port, Func<string, string, Task> onRequest)
+        : this(new AppOptions { Port = port }, onRequest) { }
 
     public void Start()
     {
@@ -59,21 +65,26 @@ public sealed class OtlpHttpReceiver : IDisposable
     {
         try
         {
-            var path = ctx.Request.Url?.AbsolutePath ?? "/";
+            var path        = ctx.Request.Url?.AbsolutePath ?? "/";
+            var contentType = ctx.Request.ContentType;
+            var isTrace     = path.StartsWith("/v1/traces", StringComparison.OrdinalIgnoreCase);
+            var forwardTo   = _opts.ForwardTo;
+            var needBody    = (isTrace || forwardTo != null)
+                              && ctx.Request.HttpMethod is "POST" or "PUT";
 
-            // Only read + forward the body for trace requests.
-            // Metrics, logs, and any future OTLP signal types are acknowledged
-            // with 200 but their bodies are not read — no wasted allocation.
-            var isTrace = path.StartsWith("/v1/traces", StringComparison.OrdinalIgnoreCase);
-
-            if (isTrace && ctx.Request.HttpMethod is "POST" or "PUT")
+            string? body = null;
+            if (needBody)
             {
                 using var reader = new StreamReader(ctx.Request.InputStream,
                     ctx.Request.ContentEncoding ?? Encoding.UTF8);
-                var body = await reader.ReadToEndAsync();
-                if (!string.IsNullOrWhiteSpace(body))
-                    await _onRequest(path, body);
+                body = await reader.ReadToEndAsync();
             }
+
+            if (isTrace && !string.IsNullOrWhiteSpace(body))
+                await _onRequest(path, body);
+
+            if (forwardTo != null && !string.IsNullOrWhiteSpace(body))
+                OtlpForwarder.Forward(forwardTo, path, body, contentType);
 
             // Always return standard OTLP success response — metrics/logs exporters
             // expect 200 just like trace exporters do.

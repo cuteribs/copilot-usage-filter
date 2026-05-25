@@ -16,11 +16,9 @@ Console.SetError(stderr);
 
 ApplicationConfiguration.Initialize();
 
-var port = 4318;
-if (args.Length > 0 && int.TryParse(args[0], out var p))
-    port = p;
+var opts = AppOptions.Parse(args);
 
-Application.Run(new MainForm(port));
+Application.Run(new MainForm(opts));
 
 [DllImport("kernel32.dll")] static extern bool AllocConsole();
 [DllImport("kernel32.dll")] static extern bool AttachConsole(uint pid);
