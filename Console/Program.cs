@@ -6,6 +6,12 @@ using CopilotUsageFilter;
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 Console.InputEncoding  = System.Text.Encoding.UTF8;
 
+if (AppOptions.IsHelp(args))
+{
+    AppOptions.PrintHelp();
+    return;
+}
+
 var opts = AppOptions.Parse(args);
 
 var processor = new SpanProcessor();

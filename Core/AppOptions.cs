@@ -20,6 +20,33 @@ public sealed class AppOptions
     // ── Parsing ───────────────────────────────────────────────────────────────
 
     /// <summary>
+    /// Returns true if any of the args is a help flag (<c>--help</c>, <c>-h</c>, <c>-?</c>).
+    /// </summary>
+    public static bool IsHelp(string[] args) =>
+        args.Any(a => a is "--help" or "-h" or "-?" or "/?");
+
+    /// <summary>
+    /// Prints usage to stdout.
+    /// </summary>
+    public static void PrintHelp(string exe = "copilot-usage-filter")
+    {
+        Console.WriteLine($"Usage: {exe} [options]");
+        Console.WriteLine();
+        Console.WriteLine("Options:");
+        Console.WriteLine("  -p, --port <n>          Local OTLP/HTTP listener port (default: 4318)");
+        Console.WriteLine("  -f, --forward-to <url>  Forward all OTLP signals to a remote collector");
+        Console.WriteLine("                          e.g. http://my-collector:4318");
+        Console.WriteLine("  -h, --help              Show this help and exit");
+        Console.WriteLine();
+        Console.WriteLine("Environment:");
+        Console.WriteLine("  Set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:<port> in the");
+        Console.WriteLine("  Copilot CLI environment so its traces are sent here.");
+        Console.WriteLine();
+        Console.WriteLine("Output files:");
+        Console.WriteLine($"  %USERPROFILE%\\.copilot\\token-usage.jsonl  (per-span JSONL export)");
+    }
+
+    /// <summary>
     /// Parses command-line args. Supported flags:
     /// <list type="bullet">
     ///   <item><c>--port &lt;n&gt;</c> or <c>-p &lt;n&gt;</c></item>

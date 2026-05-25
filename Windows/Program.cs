@@ -16,6 +16,12 @@ Console.SetError(stderr);
 
 ApplicationConfiguration.Initialize();
 
+if (AppOptions.IsHelp(args))
+{
+    AppOptions.PrintHelp("CopilotUsageFilter");
+    return;
+}
+
 var opts = AppOptions.Parse(args);
 
 Application.Run(new MainForm(opts));
